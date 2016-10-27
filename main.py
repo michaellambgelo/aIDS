@@ -1,6 +1,7 @@
 import sys
 import argparse
 import json
+import time
 from pprint import pprint
 from constants import *
 from scapy.all import *
@@ -26,17 +27,7 @@ def configureArgs():
 	group_iface_or_PCAP.add_argument("-p","--pcap-dump",
 		help = "Select a PCAP packet dump file")
 	parser.add_argument("-c","--config",
-		help = "[REQUIRED] You must provide a config file\n" + ERROR_CONFIG_EXAMPLES,
-		required = False)
-	parser.add_argument("-d","--dns-blacklist",
-		help = "[REQUIRED] You must provide a DNS blacklist configuration file\n" + ERROR_CONFIG_EXAMPLES,
-		required = False)
-	parser.add_argument("-a","--ip-blacklist",
-		help = "[REQUIRED] You must provide an IP address blacklist\n" + ERROR_CONFIG_EXAMPLES,
-		required = False)
-	parser.add_argument("-s","--signature",
-		help = "[REQUIRED] You must provide a detection signature file\n" + ERROR_CONFIG_EXAMPLES,
-		required = False)
+		help = "Select a custom config file\n" + ERROR_CONFIG_EXAMPLES)
 	return parser.parse_args()
 
 '''
@@ -54,9 +45,24 @@ def defineInterface(iface_arg):
 	return iface
 
 '''
-main
+logPacketWithTimestamp()
+'''
+def logPacketWithTimestamp(pkt, alertType):
+	out_file = open("log.log","a")
+	out_file.write(time.strftime('%a %H:%M:%S') + " " 
+		+ alertType + " : "
+		+ str(pkt[0].summary()) + "\n")
 
-Everything happens here
+'''
+ip_alert()
+'''
+def ip_alert(pkt):
+	print ALERT_MATCHED_BLACKLISTED_IP
+	print str(pkt[0].summary()) + "\n"
+	logPacketWithTimestamp(pkt,ALERT_IP_LOG_MESSAGE)
+
+'''
+main
 '''
 if __name__ == "__main__":
 	# get all our arguments
@@ -69,29 +75,36 @@ if __name__ == "__main__":
 	if args.pcap_dump is not None:
 		pcap = rdpcap(args.pcap_dump)
 
-	# get our files
-	if args.dns_blacklist is not None:
-		dns_blacklist = json.load(open(args.dns_blacklist))
-	if args.ip_blacklist is not None:
-		#file = open(args.ip_blacklist)
-		with open(args.ip_blacklist) as ip_blacklist:
-			ip_blacklist = json.load(ip_blacklist)
-		# how many IPs are blacklisted?
-		numOfblacklistedIP = len(ip_blacklist['ip'])
-		# how to access the elements
-		# ip_blacklist['ip'][0]['addr']
-	if args.signature is not None:
-		payloads_signature = json.load(open(args.signature))
+	# get our config file
+	config_file = args.config if args.config is not None else "config.json"
+	with open(config_file) as config:
+		try:
+			config = json.load(config)
+		except:
+			print ERROR_INVALID_JSON
+			sys.exit()
+		ip_blacklist = config['ip']
+		dns_blacklist = config['dns']
+		string_blacklist = config['string']
+		signature_blacklist = config['signature']
+
 
 	# how to print my IP address
 	# addr = ni.ifaddresses(iface)[AF_INET][0]['addr']
 	# print addr
 
-	pkt = sniff(iface = iface, count = 0, filter = "ip")
 
 	while True:
+		pkt = sniff(iface = iface, count = 1, filter = "ip")
 		# print type(pkt[0][IP].src)   #type str
 		# print type(ip_blacklist['ip'][0]['addr'])    #type unicode
-		for i in range(len(ip_blacklist['ip'])):
-		 	if pkt[0][IP].src == str(ip_blacklist['ip'][i]['addr']):
-		 		print "Blacklisted IP detected"
+		for i in range(len(ip_blacklist)):
+		 	if pkt[0][IP].src == str(ip_blacklist[i]['addr']):
+		 		ip_alert(pkt)
+
+
+
+
+
+
+
