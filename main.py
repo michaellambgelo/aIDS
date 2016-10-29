@@ -11,6 +11,11 @@ from scapy.layers import http
 from threading import Timer
 import netifaces as ni
 
+suppressFlag = { 	ALERT_IP_LOG_MESSAGE : False, 
+					ALERT_DNS_LOG_MESSAGE : False,
+					ALERT_STRING_LOG_MESSAGE : False,
+					ALERT_SIGNATURE_LOG_MESSAGE : False 	}
+t = None
 '''
 configureArgs() sets up all command line arguments.
 -i and -p are mutually exclusive: a user either scans a network
@@ -62,55 +67,42 @@ def logPacketWithTimestamp(pkt, alertType):
 		+ "Raw: " + pkt[0].sprintf("{Raw:%Raw.load%\n}") + '\n')
 
 '''
-ip_alert()
+alert()
 '''
-def ip_alert(pkt):
-	print ALERT_MATCHED_BLACKLISTED_IP
-	print str(pkt[0].summary()) + '\n'
-	logPacketWithTimestamp(pkt,ALERT_IP_LOG_MESSAGE)
+def alert(pkt,alert,logType):
+	global suppressFlag
+	if suppressFlag[logType] == False:
+		print alert
+		print str(pkt[0].summary()) + '\n'
+		suppressFlag[logType] = True
+		global t
+		t = Timer(SUPPRESS_ALERT_TIME_CONSTANT, suppress_alert, [logType])
+		t.start()
 
-'''
-dns_alert(pkt)
-'''
-def dns_alert(pkt):
-	print ALERT_MATCHED_BLACKLISTED_DNS
-	print str(pkt[0].summary()) + '\n'
-	logPacketWithTimestamp(pkt,ALERT_DNS_LOG_MESSAGE)
-
-'''
-string_alert(pkt)
-'''
-def string_alert(pkt):
-	print ALERT_MATCHED_BLACKLISTED_STRING_IN_URL
-	print str(pkt[0].summary()) + '\n'
-	logPacketWithTimestamp(pkt,ALERT_STRING_LOG_MESSAGE)
-
-'''
-signature_alert(pkt)
-'''
-def signature_alert(pkt):
-	print ALERT_MATCHED_PAYLOAD_SIGNATURE
-	print str(pkt[0].summary()) + '\n'
-	logPacketWithTimestamp(pkt,ALERT_SIGNATURE_LOG_MESSAGE)
+	logPacketWithTimestamp(pkt,logType)
 
 '''
 handler()
 '''
 def handler(signal,frame):
+	global t
+	t.cancel()
 	print 'Quitting...\n'
 	sys.exit(0)
 
 '''
 suppress_alert()
 '''
-def suppress_alert():
-	None
+def suppress_alert(alertType):
+	global suppressFlag
+	suppressFlag[alertType] = False
+
 '''
 main
 '''
 if __name__ == '__main__':
 	# handle SIGINT
-	# signal.signal(signal.SIGINT,handler)
+	signal.signal(signal.SIGINT,handler)
 
 	# get all our arguments
 	args = configureArgs()
@@ -136,7 +128,6 @@ if __name__ == '__main__':
 		hex_signature_blacklist = config['signature_hex']
 		string_signature_blacklist = config['signature_string']
 
-
 	# how to print my IP address
 	# addr = ni.ifaddresses(iface)[AF_INET][0]['addr']
 	# print addr
@@ -145,7 +136,7 @@ if __name__ == '__main__':
 	
 	while True:
 		pkt = sniff(iface = iface, count = 1)#, filter = 'ip')
-		wrpcap("dump.pcap",pkt)
+		#wrpcap("dump.pcap",pkt)
 		# print type(pkt[0][IP].src)   #type str
 		# print type(ip_blacklist['ip'][0]['addr'])    #type unicode
 
@@ -154,29 +145,29 @@ if __name__ == '__main__':
 			http_layer = pkt[0].getlayer(http.HTTPRequest)
 			for i in range(len(string_blacklist)):
 				if str(string_blacklist[i]['str']) in http_layer.fields['Host'] or str(string_blacklist[i]['str']) in http_layer.fields['Path']:
-					None # string_alert(pkt)
+					alert(pkt, ALERT_MATCHED_BLACKLISTED_STRING_IN_URL, ALERT_STRING_LOG_MESSAGE)
 
 		# detecting blacklisted IP addresses
 		if pkt[0].haslayer(IP):
 			for i in range(len(ip_blacklist)):
-			 	if pkt[0][IP].src == str(ip_blacklist[i]['addr']):
-			 		None # ip_alert(pkt)
+			 	if pkt[0][IP].src == str(ip_blacklist[i]['addr']) or pkt[0][IP].dst == str(ip_blacklist[i]['addr']):
+			 		alert(pkt, ALERT_MATCHED_BLACKLISTED_IP, ALERT_IP_LOG_MESSAGE)
 
 		# detecting blacklisted DNS servers
 		if pkt[0].haslayer(DNSQR):
 			dns_query = pkt[0][DNSQR].qname
 			for i in range(len(dns_blacklist)):
 				if str(dns_blacklist[i]['addr']) in dns_query:
-					None # dns_alert(pkt)
+					alert(pkt, ALERT_MATCHED_BLACKLISTED_DNS, ALERT_DNS_LOG_MESSAGE)
 
 		# detecting payload signatures
 
 		for i in range(len(hex_signature_blacklist)):
 			if str(hex_signature_blacklist[i]['hex']) in str(pkt[0]).encode("hex"):
-				None #signature_alert(pkt)
+				alert(pkt, ALERT_MATCHED_PAYLOAD_SIGNATURE, ALERT_SIGNATURE_LOG_MESSAGE)
 		for i in range(len(string_signature_blacklist)):
 			if bytes(string_signature_blacklist[i]['string']) in str(pkt[0]).encode("hex"):
-				signature_alert(pkt)
+				alert(pkt, ALERT_MATCHED_PAYLOAD_SIGNATURE, ALERT_SIGNATURE_LOG_MESSAGE)
 
 
 
