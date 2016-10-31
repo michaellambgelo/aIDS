@@ -2,25 +2,19 @@
 	"ip" : 
 	[
 		{ "addr" : "127.0.0.1" },
-		{ "addr" : "192.168.1.68" },
-		{ "addr" : "172.17.110.78" },
-		{ "addr" : "192.168.0.7" }
+		{ "addr" : "192.168.0.1" }
 	],
 	"dns" :
 	[
 		{ "addr" : "8.8.8.8" },
-		{ "addr" : "8.8.4.4" }
+		{ "addr" : "google.com" }
 	],
 	"string" :
 	[
-		{ "str" : "stackoverflow" },
+		{ "str" : "google" },
 		{ "str" : "facebook" }
 	],
-	"signature_hex" :
-	[
-		{ "hex" : "746869732069732061207465737420737472696e67" }
-	],
-	"signature_string" :
+	"signature" :
 	[
 		{ "string" : "this is a test string" }
 	]

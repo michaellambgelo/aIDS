@@ -1,4 +1,5 @@
 import sys
+import time 	# for getting the current time
 import argparse # for command line options
 import json 	# for config files
 import signal 	# for handling ctrl + c gracefully
@@ -20,9 +21,6 @@ suppressFlag = {
 	ALERT_SIGNATURE_LOG_MESSAGE : False,
 	ALERT_PORT_SCAN_LOG_MESSAGE : False }
 t = None
-
-# a dictionary of IP addresses accessing this machine
-portScanningLog = {}
 
 '''
 configureArgs() 
@@ -85,7 +83,8 @@ def logPacketWithTimestamp(pkt, alertType):
 
 '''
 alert()
-
+check to see if an alert can be displayed. if it can, start a timer
+to suppress the alert. always pass the packet to be logged.
 '''
 def alert(pkt,alert,logType):
 	global suppressFlag
@@ -101,6 +100,7 @@ def alert(pkt,alert,logType):
 
 '''
 handler()
+if there's a timer active, kill it. 
 '''
 def handler(signal,frame):
 	global t
@@ -111,6 +111,7 @@ def handler(signal,frame):
 
 '''
 suppress_alert()
+reset the given key's value to false
 '''
 def suppress_alert(alertType):
 	global suppressFlag
@@ -118,6 +119,7 @@ def suppress_alert(alertType):
 
 '''
 scanForBlacklistedStringInURL()
+parse an HTTP request for strings given in the config file
 '''
 def scanForBlacklistedStringInURL(pkt):
 	# detecting blacklisted strings in URL
@@ -129,6 +131,7 @@ def scanForBlacklistedStringInURL(pkt):
 
 '''
 scanForBlacklistedIP()
+parse a packet for source or destination IP addresses given in the config file
 '''
 def scanForBlacklistedIP(pkt):
 	# detecting blacklisted IP addresses
@@ -139,6 +142,7 @@ def scanForBlacklistedIP(pkt):
 
 '''
 scanForBlacklistedDNSQuery()
+parse a DNS request for a DNS address given in the config file
 '''
 def scanForBlacklistedDNSQuery(pkt):
 	# detecting blacklisted DNS servers
@@ -150,18 +154,25 @@ def scanForBlacklistedDNSQuery(pkt):
 
 '''
 scanForPayloadSignature()
+parse a packet's payload for signatures given in the config file
 '''
 def scanForPayloadSignature(pkt):
 	# detecting payload signatures
 	if pkt[0].haslayer(Raw):
-		for i in range(len(hex_signature_blacklist)):
-			if str(hex_signature_blacklist[i]['hex']) in repr(str(pkt[0]).encode('hex')):
-				alert(pkt, ALERT_MATCHED_PAYLOAD_SIGNATURE, ALERT_SIGNATURE_LOG_MESSAGE)
 		for i in range(len(string_signature_blacklist)):
 			if str(string_signature_blacklist[i]['string']) in repr(str(pkt[0]).encode('hex')):
 				alert(pkt, ALERT_MATCHED_PAYLOAD_SIGNATURE, ALERT_SIGNATURE_LOG_MESSAGE)
+
 '''
 detectPortScanning()
+to detect a port scan, check if a packet is destined for this machine.
+keep a dictionary where the source IP address is the key and the ports it has
+accessed are stored in a list as its matched value. if the source IP connects
+to a certain number of ports (defined in the constants file) then it triggers
+an alert. those ports are removed from the key-value pair. 
+
+a user can define a port scan by setting the number of packets in a certain 
+amount of time. these variables can be set in the constants file.
 '''
 def detectPortScanning(pkt):
 	if pkt[0].haslayer(IP):
@@ -176,15 +187,18 @@ def detectPortScanning(pkt):
 						sourcePorts.append(dport)
 						portScanningLog[src] = sourcePorts
 					if len(sourcePorts) >= PORT_SCAN_UNIQUE_PORTS_CONSANT:
-						alert(pkt, ALERT_PORT_SCANNING_MESSAGE + str(src), ALERT_PORT_SCAN_LOG_MESSAGE)
+						if time.time() - portScanningTimestamp[src] >= PORT_SCAN_TIME_CONSTRAINT_CONSTANT:
+							alert(pkt, ALERT_PORT_SCANNING_MESSAGE + str(src), ALERT_PORT_SCAN_LOG_MESSAGE)
 						del sourcePorts[:]
 						portScanningLog[src] = sourcePorts
 				else:
 					sourcePorts.append(dport)
 					portScanningLog[src] = sourcePorts
+					portScanningTimestamp[src] = time.time()
 
 '''
 processPacket()
+send a packet to all of our good friends at home
 '''
 def processPacket(pkt):
 	scanForBlacklistedIP(pkt)
@@ -195,6 +209,7 @@ def processPacket(pkt):
 
 '''
 main
+set up from command line arugments, then we sniff
 '''
 if __name__ == '__main__':
 	# handle SIGINT
@@ -213,6 +228,10 @@ if __name__ == '__main__':
 
 	# get our log file
 	logFile = args.log if args.log is not None else 'log.log'
+	
+	# dictionaries used in port scanning
+	portScanningLog = {}
+	portScanningTimestamp = {}
 
 	# get our config file
 	config_file = args.config if args.config is not None else 'config.json'
@@ -225,13 +244,7 @@ if __name__ == '__main__':
 		ip_blacklist = config['ip']
 		dns_blacklist = config['dns']
 		string_blacklist = config['string']
-		hex_signature_blacklist = config['signature_hex']
-		string_signature_blacklist = config['signature_string']
-
-
-	# how to print my IP address
-	# addr = ni.ifaddresses(iface)[AF_INET][0]['addr']
-	# print addr
+		string_signature_blacklist = config['signature']
 	
 	while True:
 		if args.pcap_dump is not None:
