@@ -160,7 +160,7 @@ def scanForPayloadSignature(pkt):
 	# detecting payload signatures
 	if pkt[0].haslayer(Raw):
 		for i in range(len(string_signature_blacklist)):
-			if str(string_signature_blacklist[i]['string']) in repr(str(pkt[0]).encode('hex')):
+			if str(string_signature_blacklist[i]['string']) in repr(str(pkt[0][Raw].load)):
 				alert(pkt, ALERT_MATCHED_PAYLOAD_SIGNATURE, ALERT_SIGNATURE_LOG_MESSAGE)
 
 '''
@@ -224,7 +224,16 @@ if __name__ == '__main__':
 
 	# get our pcap packet dump
 	if args.pcap_dump is not None:
-		pcap = rdpcap(args.pcap_dump)
+		try:
+			pcap = rdpcap(args.pcap_dump)
+		except:
+			print "An error occurred when reading the PCAP file provided"
+			sys.exit()
+
+	# check the constants configurations
+	if type(SUPPRESS_ALERT_TIME_CONSTANT) != type(0) or type(PORT_SCAN_UNIQUE_PORTS_CONSANT) != type(0) or type(PORT_SCAN_TIME_CONSTRAINT_CONSTANT) != type(0.0):
+		print "One or more of the parameters in \"constants.py\" is invalid."
+		sys.exit()
 
 	# get our log file
 	logFile = args.log if args.log is not None else 'log.log'
