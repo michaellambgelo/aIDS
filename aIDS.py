@@ -251,8 +251,3 @@ if __name__ == '__main__':
 			pkt = sniff(offline = args.pcap_dump, prn = processPacket)
 		else:
 			pkt = sniff(iface = iface, count = 0, prn = processPacket)
-
-
-
-
-

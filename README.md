@@ -14,6 +14,9 @@ You can use aIDS to detect, log, and alert:
 * Please ensure the following Python modules are installed and available:
 	* scapy
 	* netifaces
+* aIDS requires the following files to function:
+	* `constants.py`
+	* a configuration file in JSON format (`config.json` is provided)
 
 # Command Line
 The command line arguments for aIDS are as follows:
