@@ -1,23 +1,32 @@
 import sys
-import argparse
-import json
-import time
-import signal
-from pprint import pprint
-from constants import *
-from scapy.all import *
-from netifaces import *
-from scapy.layers import http
-from threading import Timer
-import netifaces as ni
+import argparse # for command line options
+import json 	# for config files
+import signal 	# for handling ctrl + c gracefully
+from constants import * 		# let there be strings
+from scapy.all import * 		# main scapy library
+from netifaces import * 		# not really useful for more than getting my IP
+from scapy.layers import http 	# used for processing HTTP requests
+from threading import Timer 	# for suppressing alerts
+import netifaces as ni 			# create an alias for netifaces
 
-suppressFlag = { 	ALERT_IP_LOG_MESSAGE : False, 
-					ALERT_DNS_LOG_MESSAGE : False,
-					ALERT_STRING_LOG_MESSAGE : False,
-					ALERT_SIGNATURE_LOG_MESSAGE : False 	}
-t = None
 '''
-configureArgs() sets up all command line arguments.
+global variables suck, but they work
+'''
+# alert suppression variables
+suppressFlag = { 
+	ALERT_IP_LOG_MESSAGE : False, 
+	ALERT_DNS_LOG_MESSAGE : False,
+	ALERT_STRING_LOG_MESSAGE : False,
+	ALERT_SIGNATURE_LOG_MESSAGE : False,
+	ALERT_PORT_SCAN_LOG_MESSAGE : False }
+t = None
+
+# a dictionary of IP addresses accessing this machine
+portScanningLog = {}
+
+'''
+configureArgs() 
+sets up all command line arguments.
 -i and -p are mutually exclusive: a user either scans a network
 interface in promiscuous mode or provides a PCAP dump file for
 scanning
@@ -35,16 +44,23 @@ def configureArgs():
 		help = 'Select a PCAP packet dump file')
 	parser.add_argument('-c','--config',
 		help = 'Select a custom config file\n' + ERROR_CONFIG_EXAMPLES)
+	parser.add_argument('-l','--log',
+		help = 'Specify a filename for log generation (the default is \'log.log\')')
 	return parser.parse_args()
 
 '''
 defineInterface()
+get an interface. if the user specified an interface, make sure it's
+real. otherwise, just get the first interface we can find.
 '''
 def defineInterface(iface_arg):
 	try:
 		if iface_arg and ni.ifaddresses(iface_arg):
 			iface = iface_arg
 			print 'Monitoring selected interface: ' + iface + '\n'
+		elif iface_arg is not None:
+			print 'The specified interface does not exist.\n'
+			sys.exit()
 		else:
 			iface = ni.interfaces()
 			iface = iface[0]
@@ -57,9 +73,10 @@ def defineInterface(iface_arg):
 
 '''
 logPacketWithTimestamp()
+open a log file and append the formatted string of the packet provided
 '''
 def logPacketWithTimestamp(pkt, alertType):
-	out_file = open('log.log','a')
+	out_file = open(logFile,'a')
 	out_file.write(time.strftime('%a %H:%M:%S') + ' ' 
 		+ alertType + ' : '
 		+ pkt[0].sprintf("{IP:%IP.src% -> %IP.dst%\n}")
@@ -68,6 +85,7 @@ def logPacketWithTimestamp(pkt, alertType):
 
 '''
 alert()
+
 '''
 def alert(pkt,alert,logType):
 	global suppressFlag
@@ -86,7 +104,8 @@ handler()
 '''
 def handler(signal,frame):
 	global t
-	t.cancel()
+	if t is not None:
+		t.cancel()
 	print 'Quitting...\n'
 	sys.exit(0)
 
@@ -96,6 +115,83 @@ suppress_alert()
 def suppress_alert(alertType):
 	global suppressFlag
 	suppressFlag[alertType] = False
+
+'''
+scanForBlacklistedStringInURL()
+'''
+def scanForBlacklistedStringInURL(pkt):
+	# detecting blacklisted strings in URL
+	if pkt[0].haslayer(http.HTTPRequest):
+		http_layer = pkt[0].getlayer(http.HTTPRequest)
+		for i in range(len(string_blacklist)):
+			if str(string_blacklist[i]['str']) in http_layer.fields['Host'] or str(string_blacklist[i]['str']) in http_layer.fields['Path']:
+				alert(pkt, ALERT_MATCHED_BLACKLISTED_STRING_IN_URL, ALERT_STRING_LOG_MESSAGE)
+
+'''
+scanForBlacklistedIP()
+'''
+def scanForBlacklistedIP(pkt):
+	# detecting blacklisted IP addresses
+	if pkt[0].haslayer(IP):
+		for i in range(len(ip_blacklist)):
+		 	if pkt[0][IP].src == str(ip_blacklist[i]['addr']) or pkt[0][IP].dst == str(ip_blacklist[i]['addr']):
+		 		alert(pkt, ALERT_MATCHED_BLACKLISTED_IP, ALERT_IP_LOG_MESSAGE)
+
+'''
+scanForBlacklistedDNSQuery()
+'''
+def scanForBlacklistedDNSQuery(pkt):
+	# detecting blacklisted DNS servers
+	if pkt[0].haslayer(DNSQR):
+		dns_query = pkt[0][DNSQR].qname
+		for i in range(len(dns_blacklist)):
+			if str(dns_blacklist[i]['addr']) in dns_query:
+				alert(pkt, ALERT_MATCHED_BLACKLISTED_DNS, ALERT_DNS_LOG_MESSAGE)
+
+'''
+scanForPayloadSignature()
+'''
+def scanForPayloadSignature(pkt):
+	# detecting payload signatures
+	if pkt[0].haslayer(Raw):
+		for i in range(len(hex_signature_blacklist)):
+			if str(hex_signature_blacklist[i]['hex']) in repr(str(pkt[0]).encode('hex')):
+				alert(pkt, ALERT_MATCHED_PAYLOAD_SIGNATURE, ALERT_SIGNATURE_LOG_MESSAGE)
+		for i in range(len(string_signature_blacklist)):
+			if str(string_signature_blacklist[i]['string']) in repr(str(pkt[0]).encode('hex')):
+				alert(pkt, ALERT_MATCHED_PAYLOAD_SIGNATURE, ALERT_SIGNATURE_LOG_MESSAGE)
+'''
+detectPortScanning()
+'''
+def detectPortScanning(pkt):
+	if pkt[0].haslayer(IP):
+		if pkt[0][IP].dst == ni.ifaddresses(iface)[AF_INET][0]['addr']:
+			if pkt[0].haslayer(TCP) or pkt[0].haslayer(UDP):
+				dport = pkt[0][TCP].dport if pkt[0].haslayer(TCP) else pkt[0][UDP].dport
+				src = pkt[0][IP].src
+				sourcePorts = []
+				if portScanningLog.has_key(src):
+					sourcePorts = portScanningLog[src]
+					if dport not in sourcePorts:
+						sourcePorts.append(dport)
+						portScanningLog[src] = sourcePorts
+					if len(sourcePorts) >= PORT_SCAN_UNIQUE_PORTS_CONSANT:
+						alert(pkt, ALERT_PORT_SCANNING_MESSAGE + str(src), ALERT_PORT_SCAN_LOG_MESSAGE)
+						del sourcePorts[:]
+						portScanningLog[src] = sourcePorts
+				else:
+					sourcePorts.append(dport)
+					portScanningLog[src] = sourcePorts
+
+'''
+processPacket()
+'''
+def processPacket(pkt):
+	scanForBlacklistedIP(pkt)
+	scanForBlacklistedStringInURL(pkt)
+	scanForBlacklistedDNSQuery(pkt)
+	scanForPayloadSignature(pkt)
+	detectPortScanning(pkt)
 
 '''
 main
@@ -108,11 +204,15 @@ if __name__ == '__main__':
 	args = configureArgs()
 
 	# get our interface
-	iface = defineInterface(args.interface)
+	if args.interface is not None:
+		iface = defineInterface(args.interface)
 
 	# get our pcap packet dump
 	if args.pcap_dump is not None:
 		pcap = rdpcap(args.pcap_dump)
+
+	# get our log file
+	logFile = args.log if args.log is not None else 'log.log'
 
 	# get our config file
 	config_file = args.config if args.config is not None else 'config.json'
@@ -128,47 +228,16 @@ if __name__ == '__main__':
 		hex_signature_blacklist = config['signature_hex']
 		string_signature_blacklist = config['signature_string']
 
+
 	# how to print my IP address
 	# addr = ni.ifaddresses(iface)[AF_INET][0]['addr']
 	# print addr
-
-	#print signature_blacklist[0]['string']
 	
 	while True:
-		pkt = sniff(iface = iface, count = 1)#, filter = 'ip')
-		#wrpcap("dump.pcap",pkt)
-		# print type(pkt[0][IP].src)   #type str
-		# print type(ip_blacklist['ip'][0]['addr'])    #type unicode
-
-		# detecting blacklisted strings in URL
-		if pkt[0].haslayer(http.HTTPRequest):
-			http_layer = pkt[0].getlayer(http.HTTPRequest)
-			for i in range(len(string_blacklist)):
-				if str(string_blacklist[i]['str']) in http_layer.fields['Host'] or str(string_blacklist[i]['str']) in http_layer.fields['Path']:
-					alert(pkt, ALERT_MATCHED_BLACKLISTED_STRING_IN_URL, ALERT_STRING_LOG_MESSAGE)
-
-		# detecting blacklisted IP addresses
-		if pkt[0].haslayer(IP):
-			for i in range(len(ip_blacklist)):
-			 	if pkt[0][IP].src == str(ip_blacklist[i]['addr']) or pkt[0][IP].dst == str(ip_blacklist[i]['addr']):
-			 		alert(pkt, ALERT_MATCHED_BLACKLISTED_IP, ALERT_IP_LOG_MESSAGE)
-
-		# detecting blacklisted DNS servers
-		if pkt[0].haslayer(DNSQR):
-			dns_query = pkt[0][DNSQR].qname
-			for i in range(len(dns_blacklist)):
-				if str(dns_blacklist[i]['addr']) in dns_query:
-					alert(pkt, ALERT_MATCHED_BLACKLISTED_DNS, ALERT_DNS_LOG_MESSAGE)
-
-		# detecting payload signatures
-
-		for i in range(len(hex_signature_blacklist)):
-			if str(hex_signature_blacklist[i]['hex']) in str(pkt[0]).encode("hex"):
-				alert(pkt, ALERT_MATCHED_PAYLOAD_SIGNATURE, ALERT_SIGNATURE_LOG_MESSAGE)
-		for i in range(len(string_signature_blacklist)):
-			if bytes(string_signature_blacklist[i]['string']) in str(pkt[0]).encode("hex"):
-				alert(pkt, ALERT_MATCHED_PAYLOAD_SIGNATURE, ALERT_SIGNATURE_LOG_MESSAGE)
-
+		if args.pcap_dump is not None:
+			pkt = sniff(offline = args.pcap_dump, prn = processPacket)
+		else:
+			pkt = sniff(iface = iface, count = 0, prn = processPacket)
 
 
 
