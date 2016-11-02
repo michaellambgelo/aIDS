@@ -11,5 +11,5 @@ while True:
 	port = random.randint(1024,65535)
 	sock.sendto(string,(ip,port))
 	time.sleep(0)
-	if num == 50:
-		break
+	# if num == 50:
+	# 	break

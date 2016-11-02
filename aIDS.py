@@ -28,10 +28,6 @@ sets up all command line arguments.
 -i and -p are mutually exclusive: a user either scans a network
 interface in promiscuous mode or provides a PCAP dump file for
 scanning
-
--d specifies a DNS blacklist
--a specifies an IP/domain blacklist
--s specifies a detection signature file for TCP/UDP payloads
 '''
 def configureArgs():
 	parser = argparse.ArgumentParser()
@@ -187,7 +183,7 @@ def detectPortScanning(pkt):
 						sourcePorts.append(dport)
 						portScanningLog[src] = sourcePorts
 					if len(sourcePorts) >= PORT_SCAN_UNIQUE_PORTS_CONSANT:
-						if time.time() - portScanningTimestamp[src] >= PORT_SCAN_TIME_CONSTRAINT_CONSTANT:
+						if time.time() - portScanningTimestamp[src] <= PORT_SCAN_TIME_CONSTRAINT_CONSTANT:
 							alert(pkt, ALERT_PORT_SCANNING_MESSAGE + str(src), ALERT_PORT_SCAN_LOG_MESSAGE)
 						del sourcePorts[:]
 						portScanningLog[src] = sourcePorts
