@@ -20,7 +20,12 @@ suppressFlag = {
 	ALERT_STRING_LOG_MESSAGE : False,
 	ALERT_SIGNATURE_LOG_MESSAGE : False,
 	ALERT_PORT_SCAN_LOG_MESSAGE : False }
-t = None
+t = { 
+	ALERT_IP_LOG_MESSAGE : None, 
+	ALERT_DNS_LOG_MESSAGE : None,
+	ALERT_STRING_LOG_MESSAGE : None,
+	ALERT_SIGNATURE_LOG_MESSAGE : None,
+	ALERT_PORT_SCAN_LOG_MESSAGE : None }
 
 '''
 configureArgs() 
@@ -37,7 +42,7 @@ def configureArgs():
 	group_iface_or_PCAP.add_argument('-p','--pcap-dump',
 		help = 'Select a PCAP packet dump file')
 	parser.add_argument('-c','--config',
-		help = 'Select a custom config file\n' + ERROR_CONFIG_EXAMPLES)
+		help = 'Select a custom config file.\n ' + ERROR_CONFIG_EXAMPLES)
 	parser.add_argument('-l','--log',
 		help = 'Specify a filename for log generation (the default is \'log.log\')')
 	return parser.parse_args()
@@ -89,19 +94,32 @@ def alert(pkt,alert,logType):
 		print str(pkt[0].summary()) + '\n'
 		suppressFlag[logType] = True
 		global t
-		t = Timer(SUPPRESS_ALERT_TIME_CONSTANT, suppress_alert, [logType])
-		t.start()
+		t[logType] = Timer(SUPPRESS_ALERT_TIME_CONSTANT, suppress_alert, [logType])
+		t[logType].start()
 
 	logPacketWithTimestamp(pkt,logType)
+'''
+cancelTimers()
+'''
+def cancelTimers():
+	global t
+	if t[ALERT_IP_LOG_MESSAGE] is not None:
+		t[ALERT_IP_LOG_MESSAGE].cancel()
+	if t[ALERT_STRING_LOG_MESSAGE] is not None:
+		t[ALERT_STRING_LOG_MESSAGE].cancel()
+	if t[ALERT_DNS_LOG_MESSAGE] is not None:
+		t[ALERT_DNS_LOG_MESSAGE].cancel()
+	if t[ALERT_SIGNATURE_LOG_MESSAGE] is not None:
+		t[ALERT_SIGNATURE_LOG_MESSAGE].cancel()
+	if t[ALERT_PORT_SCAN_LOG_MESSAGE] is not None:
+		t[ALERT_PORT_SCAN_LOG_MESSAGE].cancel()
 
 '''
 handler()
 if there's a timer active, kill it. 
 '''
 def handler(signal,frame):
-	global t
-	if t is not None:
-		t.cancel()
+	cancelTimers()
 	print 'Quitting...\n'
 	sys.exit(0)
 
@@ -171,26 +189,27 @@ a user can define a port scan by setting the number of packets in a certain
 amount of time. these variables can be set in the constants file.
 '''
 def detectPortScanning(pkt):
-	if pkt[0].haslayer(IP):
-		if pkt[0][IP].dst == ni.ifaddresses(iface)[AF_INET][0]['addr']:
-			if pkt[0].haslayer(TCP) or pkt[0].haslayer(UDP):
-				dport = pkt[0][TCP].dport if pkt[0].haslayer(TCP) else pkt[0][UDP].dport
-				src = pkt[0][IP].src
-				sourcePorts = []
-				if portScanningLog.has_key(src):
-					sourcePorts = portScanningLog[src]
-					if dport not in sourcePorts:
-						sourcePorts.append(dport)
-						portScanningLog[src] = sourcePorts
-					if len(sourcePorts) >= PORT_SCAN_UNIQUE_PORTS_CONSANT:
-						if time.time() - portScanningTimestamp[src] <= PORT_SCAN_TIME_CONSTRAINT_CONSTANT:
-							alert(pkt, ALERT_PORT_SCANNING_MESSAGE + str(src), ALERT_PORT_SCAN_LOG_MESSAGE)
-						del sourcePorts[:]
-						portScanningLog[src] = sourcePorts
-				else:
-					sourcePorts.append(dport)
-					portScanningLog[src] = sourcePorts
-					portScanningTimestamp[src] = time.time()
+	if pkt[0].haslayer(IP): # every packet that has an IP layer
+		if pkt[0][IP].dst == ni.ifaddresses(iface)[AF_INET][0]['addr']: # every packet whose destination is this machine
+			if pkt[0].haslayer(TCP) or pkt[0].haslayer(UDP): # every packet with either a TCP or UDP layer
+				dport = pkt[0][TCP].dport if pkt[0].haslayer(TCP) else pkt[0][UDP].dport # get the destination port
+				src = pkt[0][IP].src # get the source IP
+				sourcePorts = [] # make an empty list
+				if portScanningLog.has_key(src): # if we've seen this IP before
+					sourcePorts = portScanningLog[src] # get all the ports it's accessed
+					if dport not in sourcePorts: # if the port it's accessing now is new
+						sourcePorts.append(dport) # add it to the existing list
+						portScanningLog[src] = sourcePorts # and send it back to the dictionary
+					if len(sourcePorts) >= PORT_SCAN_UNIQUE_PORTS_CONSANT: # if there are more ports accessed than defined by the constant
+						if time.time() - portScanningTimestamp[src] <= PORT_SCAN_TIME_CONSTRAINT_CONSTANT: # and if these ports have been accessed quickly enough
+							alert(pkt, ALERT_PORT_SCANNING_MESSAGE + str(src), ALERT_PORT_SCAN_LOG_MESSAGE) # print the alert
+						del sourcePorts[:] # no matter what, remove all the ports we've recorded
+						portScanningLog[src] = sourcePorts # and add the empty list back
+						portScanningTimestamp[src] = time.time() # update the time to now
+				else: # we haven't seen this IP before
+					sourcePorts.append(dport) # add the port to the list
+					portScanningLog[src] = sourcePorts # put the list in the dictionary
+					portScanningTimestamp[src] = time.time() # log the time we've first seen this guy
 
 '''
 processPacket()
@@ -215,7 +234,7 @@ if __name__ == '__main__':
 	args = configureArgs()
 
 	# get our interface
-	if args.interface is not None:
+	if args.pcap_dump is None:
 		iface = defineInterface(args.interface)
 
 	# get our pcap packet dump
@@ -232,14 +251,14 @@ if __name__ == '__main__':
 		sys.exit()
 
 	# get our log file
-	logFile = args.log if args.log is not None else 'log.log'
+	logFile = args.log if args.log is not None else DEFAULT_LOG_FILE_NAME
 	
 	# dictionaries used in port scanning
 	portScanningLog = {}
 	portScanningTimestamp = {}
 
 	# get our config file
-	config_file = args.config if args.config is not None else 'config.json'
+	config_file = args.config if args.config is not None else DEFAULT_CONFIG_FILE_NAME
 	with open(config_file) as config:
 		try:
 			config = json.load(config)

@@ -15,8 +15,12 @@ ALERT_SIGNATURE_LOG_MESSAGE = '[PSIG]'
 ALERT_PORT_SCANNING_MESSAGE = 'A port scan was detected from IP: '
 ALERT_PORT_SCAN_LOG_MESSAGE = '[PSCN]'
 
+# default file names
+DEFAULT_LOG_FILE_NAME = 'log.log'
+DEFAULT_CONFIG_FILE_NAME = 'config.json'
+
 # timer; the number of seconds to suppress alerts to the console
-SUPPRESS_ALERT_TIME_CONSTANT = 300
+SUPPRESS_ALERT_TIME_CONSTANT = 30
 
 '''
 port scan parameters
